@@ -1,11 +1,28 @@
 export default async function handler(req, res) {
+  // Enable CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  
+  // Handle OPTIONS request
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages, apiKey, provider } = req.body;
-
   try {
+    const { messages, apiKey, provider } = req.body;
+    
+    console.log('Received request:', { provider, hasKey: !!apiKey, messageCount: messages?.length });
+
+    if (!apiKey) {
+      return res.status(400).json({ error: 'API key is required' });
+    }
+
     if (provider === 'openai') {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -21,16 +38,22 @@ export default async function handler(req, res) {
         })
       });
       
+      const data = await response.json();
+      
       if (!response.ok) {
-        const error = await response.text();
-        console.error('OpenAI error:', error);
-        throw new Error('OpenAI API error');
+        console.error('OpenAI error:', data);
+        return res.status(response.status).json({ error: data.error?.message || 'OpenAI API error' });
       }
       
-      const data = await response.json();
-      res.status(200).json(data);
+      return res.status(200).json(data);
       
     } else if (provider === 'claude') {
+      // For Claude, we need to format messages differently
+      const claudeMessages = messages.map(msg => ({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      }));
+
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -40,36 +63,34 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: 'claude-3-sonnet-20240229',
-          messages: messages.map(msg => ({
-            role: msg.role === 'assistant' ? 'assistant' : 'user',
-            content: msg.content
-          })),
+          messages: claudeMessages,
           max_tokens: 150
         })
       });
       
+      const data = await response.json();
+      
       if (!response.ok) {
-        const error = await response.text();
-        console.error('Claude error:', error);
-        throw new Error('Claude API error');
+        console.error('Claude error:', data);
+        return res.status(response.status).json({ error: data.error?.message || 'Claude API error' });
       }
       
-      const data = await response.json();
       // Format Claude response to match OpenAI structure
-      const formattedResponse = {
+      return res.status(200).json({
         choices: [{
           message: {
             content: data.content[0].text
           }
         }]
-      };
-      res.status(200).json(formattedResponse);
+      });
+    } else {
+      return res.status(400).json({ error: 'Invalid provider' });
     }
   } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to get AI response',
-      details: error.message 
+    console.error('Server error:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error', 
+      message: error.message 
     });
   }
 }
