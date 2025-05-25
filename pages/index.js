@@ -1,3 +1,4 @@
+javascript
 import React, { useState, useEffect } from 'react';
 import { Settings, MessageSquare, TrendingUp, BookOpen, Heart, Brain, AlertCircle, Calendar, Target, Smile, Frown, Meh, Cloud, Sun, CloudRain, ChevronRight, Key, Save, X, Send, Mic, Menu, Home, BarChart3, History, User, LogOut, Shield, Download, Plus, Check, Circle } from 'lucide-react';
 
@@ -35,10 +36,16 @@ const AITherapistApp = () => {
       { id: 3, text: 'Take a walk in nature weekly', completed: true, progress: 100 },
     ];
     setGoals(sampleGoals);
+
+    // Load API key from localStorage
+    const savedApiKey = localStorage.getItem('apiKey');
+    const savedProvider = localStorage.getItem('apiProvider');
+    if (savedApiKey) setApiKey(savedApiKey);
+    if (savedProvider) setApiProvider(savedProvider);
   }, []);
 
   const sendMessage = async () => {
-    if (!inputMessage.trim()) return;
+    if (!inputMessage.trim() || isTyping) return;
     
     const userMessage = { role: 'user', content: inputMessage };
     setMessages([...messages, userMessage]);
@@ -57,7 +64,9 @@ const AITherapistApp = () => {
         return;
       }
 
-      // For demo purposes - in production, this would call your API route
+      // Add delay to prevent rate limiting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -68,17 +77,17 @@ const AITherapistApp = () => {
         })
       });
 
-      if (!response.ok) {
-        throw new Error('API request failed');
-      }
-
       const data = await response.json();
       
+      if (!response.ok) {
+        throw new Error(data.error || 'API request failed');
+      }
+      
       let aiContent = '';
-      if (apiProvider === 'openai') {
+      if (data.choices && data.choices[0]) {
         aiContent = data.choices[0].message.content;
-      } else if (apiProvider === 'claude') {
-        aiContent = data.completion;
+      } else {
+        aiContent = "I'm here to listen and support you. Please continue sharing your thoughts.";
       }
 
       const aiResponse = {
@@ -97,10 +106,22 @@ const AITherapistApp = () => {
       setSentimentData(prev => [...prev.slice(-6), newSentiment]);
       
     } catch (error) {
-      // Fallback for demo
+      console.error('Chat error:', error);
+      
+      // Handle specific errors
+      let errorMessage = "I'm having trouble connecting right now. ";
+      
+      if (error.message.includes('429')) {
+        errorMessage = "You're sending messages too quickly. Please wait a moment before trying again.";
+      } else if (error.message.includes('401')) {
+        errorMessage = "Your API key seems to be invalid. Please check your settings.";
+      } else if (error.message.includes('insufficient_quota')) {
+        errorMessage = "You've reached your API usage limit. Please check your account credits.";
+      }
+      
       const aiResponse = {
         role: 'assistant',
-        content: "I hear you and I'm here to support you. Your feelings are valid. Can you tell me more about what's been on your mind lately?"
+        content: errorMessage
       };
       setMessages(prev => [...prev, aiResponse]);
     } finally {
@@ -108,14 +129,29 @@ const AITherapistApp = () => {
     }
   };
 
-  const saveMoodEntry = () => {
-    if (journalEntry.trim()) {
+  const saveMoodEntry = async () => {
+    if (journalEntry.trim() || currentMood) {
       const newEntry = {
         date: new Date().toLocaleString(),
         mood: currentMood,
         entry: journalEntry
       };
       setMoodEntries([...moodEntries, newEntry]);
+      
+      // Save to backend
+      try {
+        await fetch('/api/mood', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            moodScore: currentMood,
+            notes: journalEntry
+          })
+        });
+      } catch (error) {
+        console.error('Failed to save mood:', error);
+      }
+      
       setJournalEntry('');
     }
   };
@@ -134,6 +170,12 @@ const AITherapistApp = () => {
     setGoals(goals.map(goal => 
       goal.id === id ? { ...goal, completed: !goal.completed, progress: goal.completed ? 0 : 100 } : goal
     ));
+  };
+
+  const saveSettings = () => {
+    localStorage.setItem('apiKey', apiKey);
+    localStorage.setItem('apiProvider', apiProvider);
+    setShowSettings(false);
   };
 
   const getMoodIcon = (mood) => {
@@ -248,9 +290,17 @@ const AITherapistApp = () => {
             type="text"
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+            onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
             placeholder="Share your thoughts..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:border-purple-500"
+            style={{
+              flex: 1,
+              padding: '8px 16px',
+              border: '1px solid #d1d5db',
+              borderRadius: '9999px',
+              outline: 'none',
+              fontSize: '16px'
+            }}
+            autoComplete="off"
           />
           <button
             onClick={sendMessage}
@@ -590,7 +640,7 @@ const AITherapistApp = () => {
                 <Key className="w-5 h-5" />
               </button>
             </div>
-            <p className="mt-2 text-xs text-gray-500">Your API key is encrypted and stored securely</p>
+            <p className="mt-2 text-xs text-gray-500">Your API key is stored locally and never sent to our servers</p>
           </div>
 
           <div>
@@ -619,7 +669,7 @@ const AITherapistApp = () => {
               Cancel
             </button>
             <button
-              onClick={() => setShowSettings(false)}
+              onClick={saveSettings}
               className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
             >
               Save Changes
