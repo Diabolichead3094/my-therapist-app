@@ -1,30 +1,26 @@
+javascript
 export default async function handler(req, res) {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  // Handle OPTIONS request
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ error: 'Method not allowed' })
   }
 
   try {
-    const { messages, apiKey, provider } = req.body;
-    
-    console.log('Received request:', { provider, hasKey: !!apiKey, messageCount: messages?.length });
+    const { messages, provider, apiKey } = req.body
 
+    // Check if API key is provided
     if (!apiKey) {
-      return res.status(400).json({ error: 'API key is required' });
+      return res.status(200).json({
+        choices: [{
+          message: {
+            content: "Please set your API key in the settings to start chatting. I'm here to help once you've configured your AI provider."
+          }
+        }]
+      })
     }
 
+    let response
     if (provider === 'openai') {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -32,29 +28,31 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: 'gpt-3.5-turbo',
-          messages: messages,
+          messages: [
+            {
+              role: 'system',
+              content: `You are a compassionate AI therapist. Be empathetic, supportive, and help users explore their feelings. 
+              Never provide medical diagnosis or medication advice. Encourage professional help for serious issues.
+              Keep responses concise but warm and supportive.`
+            },
+            ...messages
+          ],
           temperature: 0.7,
-          max_tokens: 150
+          max_tokens: 200
         })
-      });
-      
-      const data = await response.json();
-      
+      })
+
       if (!response.ok) {
-        console.error('OpenAI error:', data);
-        return res.status(response.status).json({ error: data.error?.message || 'OpenAI API error' });
+        const error = await response.text()
+        console.error('OpenAI error:', error)
+        throw new Error('OpenAI API error')
       }
-      
-      return res.status(200).json(data);
+
+      const data = await response.json()
+      return res.status(200).json(data)
       
     } else if (provider === 'claude') {
-      // For Claude, we need to format messages differently
-      const claudeMessages = messages.map(msg => ({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: msg.content
-      }));
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -63,17 +61,24 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: 'claude-3-sonnet-20240229',
-          messages: claudeMessages,
-          max_tokens: 150
+          system: `You are a compassionate AI therapist. Be empathetic, supportive, and help users explore their feelings. 
+          Never provide medical diagnosis or medication advice. Encourage professional help for serious issues.
+          Keep responses concise but warm and supportive.`,
+          messages: messages.map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content
+          })),
+          max_tokens: 200
         })
-      });
-      
-      const data = await response.json();
-      
+      })
+
       if (!response.ok) {
-        console.error('Claude error:', data);
-        return res.status(response.status).json({ error: data.error?.message || 'Claude API error' });
+        const error = await response.text()
+        console.error('Claude error:', error)
+        throw new Error('Claude API error')
       }
+
+      const data = await response.json()
       
       // Format Claude response to match OpenAI structure
       return res.status(200).json({
@@ -82,15 +87,19 @@ export default async function handler(req, res) {
             content: data.content[0].text
           }
         }]
-      });
-    } else {
-      return res.status(400).json({ error: 'Invalid provider' });
+      })
     }
+
   } catch (error) {
-    console.error('Server error:', error);
-    return res.status(500).json({ 
-      error: 'Internal server error', 
-      message: error.message 
-    });
+    console.error('Chat API error:', error)
+    
+    // Return a helpful error message
+    return res.status(200).json({
+      choices: [{
+        message: {
+          content: "I'm having trouble connecting right now. Please check your API key and make sure you have credits available. If the problem persists, try again in a moment."
+        }
+      }]
+    })
   }
 }
